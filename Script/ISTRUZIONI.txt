@@ -1,0 +1,42 @@
+﻿COME USARE
+1) Metti il file di rendicontazione dentro la cartella: Input
+2) Fai doppio click su: ESEGUI_REPORT_ORE_VIAGGIO.bat
+3) Il risultato verra creato in: Output\Report_Ore_Viaggio_Filtrato.xlsx
+
+STRUTTURA CARTELLE
+- ESEGUI_REPORT_ORE_VIAGGIO.bat (da cliccare)
+- Input\ (metti qui il file sorgente)
+- Output\ (qui trovi il file generato)
+- Script\ (contiene .ps1 e istruzioni)
+
+CAMPI NEL REPORT OUTPUT
+- Codice Azienda
+- Descr. Azienda
+- Codice dipendente
+- Manutentore
+- Data
+- somma_totale
+- Ore_Viaggio
+
+LOGICA APPLICATA
+- Filtro reparto: Descr.Reparto = MANUTENTORI oppure Reparto = MAN
+- Aggregazione: una sola riga per Codice dipendente + Manutentore + Data
+- somma_totale: somma di Qta del giorno
+- Ore_Viaggio: somma di Qta del giorno solo per righe con:
+  Cod. Argomento = CHIUSURA
+  oppure
+  Progetto = COMMESSA
+
+NOTE PORTABILITA
+- Funziona su altri PC Windows senza installare librerie esterne.
+- Usa solo PowerShell e librerie .NET gia presenti nel sistema.
+- Formati input supportati in modalita portabile: .xlsx e .csv
+- Se hai un .xls, convertilo prima in .xlsx o .csv.
+
+ESECUZIONE DA TERMINALE (opzionale)
+- Input/Output automatici:
+  ESEGUI_REPORT_ORE_VIAGGIO.bat
+- Input manuale (nome dentro Input):
+  ESEGUI_REPORT_ORE_VIAGGIO.bat "rendicontazione.xlsx"
+- Input + output manuale (output finisce in Output):
+  ESEGUI_REPORT_ORE_VIAGGIO.bat "rendicontazione.xlsx" "mio_report.xlsx"
