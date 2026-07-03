@@ -48,15 +48,21 @@ class GroupSummary:
     order: int
     base_row: list[Any]
     total_hours: float
-    travel_hours: float
-    travel_residual: float
+    travel_gross_hours: float
+    travel_net_hours: float
     timing_alerts: str
 
     @property
-    def travel_ratio(self) -> float:
+    def gross_ratio(self) -> float:
         if self.total_hours <= 0:
             return 0.0
-        return self.travel_hours / self.total_hours
+        return self.travel_gross_hours / self.total_hours
+
+    @property
+    def net_ratio(self) -> float:
+        if self.total_hours <= 0:
+            return 0.0
+        return self.travel_net_hours / self.total_hours
 
 
 def app_root() -> Path:
@@ -283,11 +289,9 @@ def build_summary_rows(src_ws) -> list[GroupSummary]:
         gross_travel = round(info["travel_gross_hours"], 5)
         is_manutentori = str(base_row[7] or "").strip().upper() == "MANUTENTORI"
         if is_manutentori:
-            travel_hours = gross_travel
-            travel_residual = round(gross_travel - 1.0, 5) if gross_travel < 1.0 else 0.0
+            travel_net_hours = round(gross_travel - 1.0, 5)
         else:
-            travel_hours = 0.0
-            travel_residual = 0.0
+            travel_net_hours = 0.0
 
         timing_alerts: list[str] = []
         if is_manutentori:
@@ -307,8 +311,8 @@ def build_summary_rows(src_ws) -> list[GroupSummary]:
                 order=info["order"],
                 base_row=base_row,
                 total_hours=round(info["total_hours"], 5),
-                travel_hours=travel_hours,
-                travel_residual=travel_residual,
+                travel_gross_hours=gross_travel if is_manutentori else 0.0,
+                travel_net_hours=travel_net_hours,
                 timing_alerts="; ".join(timing_alerts),
             )
         )
@@ -320,7 +324,14 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
     clone_sheet_layout(src_ws, dst_ws)
 
     headers = [label for _, label in SUMMARY_SOURCE_COLUMNS]
-    headers.extend(["Ore lavorate totali", "Ore viaggio", "Residuo netto", "% viaggio", TIMING_ALERT_COLUMN])
+    headers.extend([
+        "Ore lavorate totali",
+        "Ore viaggio lorde",
+        "Ore viaggio nette",
+        "% viaggio lorde",
+        "% viaggio nette",
+        TIMING_ALERT_COLUMN,
+    ])
 
     summaries = build_summary_rows(src_ws)
 
@@ -342,9 +353,10 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
         values.extend(
             [
                 summary.total_hours,
-                summary.travel_hours,
-                summary.travel_residual,
-                round(summary.travel_ratio, 4),
+                summary.travel_gross_hours,
+                summary.travel_net_hours,
+                round(summary.gross_ratio, 4),
+                round(summary.net_ratio, 4),
                 summary.timing_alerts,
             ]
         )
@@ -352,9 +364,9 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
         for c, value in enumerate(values, start=1):
             cell = dst_ws.cell(row_idx, c)
             cell.value = value
-            if c in (9, 10, 11):
+            if c in (9, 10):
                 cell.number_format = "0.00000"
-            elif c == 12:
+            elif c in (11, 12):
                 cell.number_format = "0.0000%"
             elif c == 8:
                 cell.number_format = "dd/mm/yyyy"
@@ -379,9 +391,9 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
             dst_ws.column_dimensions[get_column_letter(c)].width = 24
         elif c == 8:
             dst_ws.column_dimensions[get_column_letter(c)].width = 14
-        elif c in (9, 10, 11):
+        elif c in (9, 10):
             dst_ws.column_dimensions[get_column_letter(c)].width = 16
-        elif c == 12:
+        elif c in (11, 12):
             dst_ws.column_dimensions[get_column_letter(c)].width = 14
         elif c == 13:
             dst_ws.column_dimensions[get_column_letter(c)].width = 42
