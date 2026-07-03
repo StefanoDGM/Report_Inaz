@@ -1,6 +1,6 @@
 # Report Commesse
 
-Tool Windows per elaborare il file di stampa commesse mensile.
+Strumento Windows per elaborare il file di stampa commesse mensile.
 
 ## Cosa fa
 
@@ -17,9 +17,10 @@ Il file generato contiene 2 fogli:
    - raggruppa per dipendente e giorno
    - calcola le ore lavorate totali
    - per le righe con `Descr.Reparto = MANUTENTORI` somma le ore di `COMMESSA` e `CHIUSURA`
-   - solo per i `MANUTENTORI` calcola anche il residuo netto come `Ore viaggio - 1 ora`
-   - per tutti gli altri reparti `Ore viaggio` e `Residuo netto` restano a `0`
+   - per i `MANUTENTORI` sottrae 1 ora di pausa e mostra il residuo solo se il totale viaggio non copre la pausa
+   - per tutti gli altri reparti lascia `Ore viaggio` e `Residuo netto` a `0`
    - calcola la percentuale di ore viaggio sul totale
+   - aggiunge `Errori probabili timbrature`, che controlla per ogni manutentore e per ogni commessa se mancano righe di chiusura o generiche
    - puoi filtrare manualmente la colonna `% viaggio` in Excel
 
 ## Struttura cartelle
@@ -73,4 +74,5 @@ Per generare l'eseguibile usa:
 - Il foglio sorgente atteso si chiama `Stampa Commesse Dipendente`.
 - Il programma prende il file `.xlsx` piu recente nella cartella `input`.
 - I file temporanei di Excel con prefisso `~$` vengono ignorati.
-- La logica del calcolo e nel file `src/report_commesse.py`.
+- Se vuoi cambiare il criterio di calcolo delle ore viaggio, la logica e nel file `src/report_commesse.py`.
+- Gli alert di timbratura confrontano, per ogni manutentore e per ogni commessa, quante righe hanno `Cod. Argomento = CHIUSURA` e quante hanno un argomento diverso da `CHIUSURA`.
