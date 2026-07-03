@@ -34,8 +34,6 @@ SUMMARY_SOURCE_COLUMNS = [
     (7, "Reparto"),
     (8, "Cod. Progetto"),
     (9, "Progetto"),
-    (10, "Cod. Argomento"),
-    (11, "Argomento"),
     (14, "Codice dipendente"),
     (15, "Nominativo"),
     (16, "Data"),
