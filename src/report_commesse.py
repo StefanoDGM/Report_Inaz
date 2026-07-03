@@ -31,6 +31,16 @@ SUMMARY_SHEET_NAME = "Riepilogo Viaggi"
 TOTAL_PROJ_MARKER = "Totale"
 TRAVEL_KEYWORDS = ("COMMESSA", "CHIUSURA")
 TIMING_ALERT_COLUMN = "Errori probabili timbrature"
+SUMMARY_SOURCE_COLUMNS = [
+    (7, "Reparto"),
+    (8, "Cod. Progetto"),
+    (9, "Progetto"),
+    (10, "Cod. Argomento"),
+    (11, "Argomento"),
+    (14, "Codice dipendente"),
+    (15, "Nominativo"),
+    (16, "Data"),
+]
 
 
 @dataclass
@@ -309,12 +319,8 @@ def build_summary_rows(src_ws) -> list[GroupSummary]:
 def build_summary_sheet(src_ws, dst_ws) -> None:
     clone_sheet_layout(src_ws, dst_ws)
 
-    headers = [src_ws.cell(1, c).value for c in range(1, src_ws.max_column + 1)]
-    headers[17] = "Ore lavorate totali"
-    headers.append("Ore viaggio")
-    headers.append("Residuo netto")
-    headers.append("% viaggio")
-    headers.append(TIMING_ALERT_COLUMN)
+    headers = [label for _, label in SUMMARY_SOURCE_COLUMNS]
+    headers.extend(["Ore lavorate totali", "Ore viaggio", "Residuo netto", "% viaggio", TIMING_ALERT_COLUMN])
 
     summaries = build_summary_rows(src_ws)
 
@@ -332,21 +338,25 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
         cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     for row_idx, summary in enumerate(summaries, start=5):
-        values = list(summary.base_row[:17])
-        values.append(summary.total_hours)
-        values.append(summary.travel_hours)
-        values.append(summary.travel_residual)
-        values.append(round(summary.travel_ratio, 4))
-        values.append(summary.timing_alerts)
+        values = [summary.base_row[idx] for idx, _ in SUMMARY_SOURCE_COLUMNS]
+        values.extend(
+            [
+                summary.total_hours,
+                summary.travel_hours,
+                summary.travel_residual,
+                round(summary.travel_ratio, 4),
+                summary.timing_alerts,
+            ]
+        )
 
         for c, value in enumerate(values, start=1):
             cell = dst_ws.cell(row_idx, c)
             cell.value = value
-            if c in (18, 19, 20):
+            if c in (9, 10, 11):
                 cell.number_format = "0.00000"
-            elif c == 21:
+            elif c == 12:
                 cell.number_format = "0.0000%"
-            elif c == 17:
+            elif c == 8:
                 cell.number_format = "dd/mm/yyyy"
 
     dst_ws.freeze_panes = "A5"
@@ -356,21 +366,25 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
 
     for c in range(1, len(headers) + 1):
         if c == 1:
-            dst_ws.column_dimensions[get_column_letter(c)].width = 18
-        elif c in (2, 16):
-            dst_ws.column_dimensions[get_column_letter(c)].width = 24
+            dst_ws.column_dimensions[get_column_letter(c)].width = 22
+        elif c == 2:
+            dst_ws.column_dimensions[get_column_letter(c)].width = 16
         elif c == 3:
-            dst_ws.column_dimensions[get_column_letter(c)].width = 14
-        elif c == 4:
-            dst_ws.column_dimensions[get_column_letter(c)].width = 18
-        elif c == 20:
+            dst_ws.column_dimensions[get_column_letter(c)].width = 26
+        elif c in (4, 5):
+            dst_ws.column_dimensions[get_column_letter(c)].width = 26
+        elif c == 6:
             dst_ws.column_dimensions[get_column_letter(c)].width = 16
-        elif c == 21:
+        elif c == 7:
+            dst_ws.column_dimensions[get_column_letter(c)].width = 24
+        elif c == 8:
             dst_ws.column_dimensions[get_column_letter(c)].width = 14
-        elif c == 22:
+        elif c in (9, 10, 11):
+            dst_ws.column_dimensions[get_column_letter(c)].width = 16
+        elif c == 12:
+            dst_ws.column_dimensions[get_column_letter(c)].width = 14
+        elif c == 13:
             dst_ws.column_dimensions[get_column_letter(c)].width = 42
-        elif c in (17, 18, 19):
-            dst_ws.column_dimensions[get_column_letter(c)].width = 16
 
 
 def process_file(source_path: Path) -> Path:
