@@ -21,8 +21,7 @@ Il file generato contiene 2 fogli:
    - per i `MANUTENTORI` calcola `Ore viaggio lorde` e `Ore viaggio nette`
    - per i `MANUTENTORI` calcola anche `% viaggio lorde` e `% viaggio nette`
    - per tutti gli altri reparti lascia queste colonne a `0`
-   - aggiunge `Errori probabili timbrature`, che controlla per ogni manutentore e per ogni commessa se mancano righe di chiusura o generiche
-   - puoi filtrare manualmente la colonna `% viaggio lorde` o `% viaggio nette` in Excel
+   - puoi filtrare manualmente la colonna `% viaggio nette` o `% viaggio lorde` in Excel
 
 ## Struttura cartelle
 
@@ -38,7 +37,7 @@ Quando usi l'eseguibile compilato, queste cartelle devono stare nella stessa car
 2. Avvia il programma.
 3. Premi `Elabora file` oppure usa l'eseguibile.
 4. Troverai il risultato nella cartella `output`.
-5. Apri il foglio `Riepilogo Viaggi` e filtra la colonna `% viaggio lorde` o `% viaggio nette` in Excel come preferisci.
+5. Apri il foglio `Riepilogo Viaggi` e filtra la colonna `% viaggio nette` o `% viaggio lorde` in Excel come preferisci.
 
 ## Avvio
 
@@ -76,4 +75,3 @@ Per generare l'eseguibile usa:
 - Il programma prende il file `.xlsx` piu recente nella cartella `input`.
 - I file temporanei di Excel con prefisso `~$` vengono ignorati.
 - Se vuoi cambiare il criterio di calcolo delle ore viaggio, la logica e nel file `src/report_commesse.py`.
-- Gli alert di timbratura confrontano, per ogni manutentore e per ogni commessa, quante righe hanno `Cod. Argomento = CHIUSURA` e quante hanno un argomento diverso da `CHIUSURA`.
