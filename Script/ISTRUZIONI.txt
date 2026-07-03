@@ -1,42 +1,29 @@
-﻿COME USARE
-1) Metti il file di rendicontazione dentro la cartella: Input
-2) Fai doppio click su: ESEGUI_REPORT_ORE_VIAGGIO.bat
-3) Il risultato verra creato in: Output\Report_Ore_Viaggio_Filtrato.xlsx
+COME USARE
+1) Copia il file Excel del mese dentro la cartella `dist\input`.
+2) Avvia `dist\ReportCommesse.exe`.
+3) Il programma crea il file elaborato in `dist\output`.
+4) Apri il file generato e filtra manualmente la colonna `% viaggio` in Excel.
 
 STRUTTURA CARTELLE
-- ESEGUI_REPORT_ORE_VIAGGIO.bat (da cliccare)
-- Input\ (metti qui il file sorgente)
-- Output\ (qui trovi il file generato)
-- Script\ (contiene .ps1 e istruzioni)
+- `dist\ReportCommesse.exe` = eseguibile da avviare
+- `dist\input\` = cartella dove inserire il file sorgente del mese
+- `dist\output\` = cartella dove trovare il file elaborato
 
-CAMPI NEL REPORT OUTPUT
-- Codice Azienda
-- Descr. Azienda
-- Codice dipendente
-- Manutentore
-- Data
-- somma_totale
-- Ore_Viaggio
+FOGLI DEL FILE GENERATO
+- `Stampa Commesse Dipendente`
+  - copia completa del file sorgente
+  - ore convertite in formato centesimale con 5 decimali
 
-LOGICA APPLICATA
-- Filtro reparto: Descr.Reparto = MANUTENTORI oppure Reparto = MAN
-- Aggregazione: una sola riga per Codice dipendente + Manutentore + Data
-- somma_totale: somma di Qta del giorno
-- Ore_Viaggio: somma di Qta del giorno solo per righe con:
-  Cod. Argomento = CHIUSURA
-  oppure
-  Progetto = COMMESSA
+- `Riepilogo Viaggi`
+  - raggruppa per dipendente e per giorno
+  - calcola le ore lavorate totali
+  - per le righe con `Descr.Reparto = MANUTENTORI` somma le ore di `COMMESSA` e `CHIUSURA`
+  - per i `MANUTENTORI` il residuo pausa viene mostrato solo se il totale viaggio non copre 1 ora
+  - per tutti gli altri reparti `Ore viaggio` e `Residuo netto` restano a `0`
+  - la colonna `% viaggio` è pronta per il filtro manuale di Excel
 
-NOTE PORTABILITA
-- Funziona su altri PC Windows senza installare librerie esterne.
-- Usa solo PowerShell e librerie .NET gia presenti nel sistema.
-- Formati input supportati in modalita portabile: .xlsx e .csv
-- Se hai un .xls, convertilo prima in .xlsx o .csv.
-
-ESECUZIONE DA TERMINALE (opzionale)
-- Input/Output automatici:
-  ESEGUI_REPORT_ORE_VIAGGIO.bat
-- Input manuale (nome dentro Input):
-  ESEGUI_REPORT_ORE_VIAGGIO.bat "rendicontazione.xlsx"
-- Input + output manuale (output finisce in Output):
-  ESEGUI_REPORT_ORE_VIAGGIO.bat "rendicontazione.xlsx" "mio_report.xlsx"
+NOTE
+- Il file sorgente atteso deve essere un `.xlsx`.
+- Se ci sono più file nella cartella `dist\input`, viene usato il più recente.
+- Il file vecchio viene sostituito completamente dal nuovo output.
+- L'eseguibile funziona come applicazione standalone su Windows.
