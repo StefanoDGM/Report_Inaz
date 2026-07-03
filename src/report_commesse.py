@@ -30,6 +30,7 @@ SUMMARY_SHEET_NAME = "Riepilogo Viaggi"
 
 TOTAL_PROJ_MARKER = "Totale"
 TRAVEL_KEYWORDS = ("COMMESSA", "CHIUSURA")
+TIMING_ALERT_COLUMN = "Errori probabili timbrature"
 
 
 @dataclass
@@ -39,6 +40,7 @@ class GroupSummary:
     total_hours: float
     travel_hours: float
     travel_residual: float
+    timing_alerts: str
 
     @property
     def travel_ratio(self) -> float:
@@ -140,6 +142,29 @@ def travel_row(row: list[Any]) -> bool:
     return False
 
 
+def normalize_text(value: Any) -> str:
+    return str(value or "").strip().casefold()
+
+
+def is_generic_commessa_name(project_name: str) -> bool:
+    return normalize_text(project_name) == "commessa"
+
+
+def build_timing_alert_text(project_name: str, missing_closures: int, missing_generics: int) -> list[str]:
+    alerts: list[str] = []
+    if missing_closures > 0:
+        if missing_closures == 1:
+            alerts.append(f'manca commessa "{project_name}" con argomento chiusura')
+        else:
+            alerts.append(f'mancano {missing_closures} commesse "{project_name}" con argomento chiusura')
+    if missing_generics > 0:
+        if missing_generics == 1:
+            alerts.append(f'manca timbratura per commessa "{project_name}" con argomento generico')
+        else:
+            alerts.append(f'mancano {missing_generics} timbrature per commessa "{project_name}" con argomento generico')
+    return alerts
+
+
 def copy_cell_style(src, dst) -> None:
     dst.font = copy.copy(src.font)
     dst.fill = copy.copy(src.fill)
@@ -215,6 +240,7 @@ def build_summary_rows(src_ws) -> list[GroupSummary]:
                 "rows": [],
                 "total_hours": 0.0,
                 "travel_gross_hours": 0.0,
+                "project_stats": OrderedDict(),
             }
             info = grouped[key]
 
@@ -223,6 +249,23 @@ def build_summary_rows(src_ws) -> list[GroupSummary]:
         info["total_hours"] += hours
         if travel_row(values):
             info["travel_gross_hours"] += hours
+
+        project_name = str(values[9] or "").strip()
+        project_name_norm = normalize_text(project_name)
+        cod_argomento = normalize_text(values[10])
+        if project_name and not is_generic_commessa_name(project_name):
+            stats = info["project_stats"].get(project_name_norm)
+            if stats is None:
+                info["project_stats"][project_name_norm] = {
+                    "project_name": project_name,
+                    "closure_count": 0,
+                    "generic_count": 0,
+                }
+                stats = info["project_stats"][project_name_norm]
+            if cod_argomento == "chiusura":
+                stats["closure_count"] += 1
+            else:
+                stats["generic_count"] += 1
 
     summaries: list[GroupSummary] = []
     for info in grouped.values():
@@ -235,6 +278,20 @@ def build_summary_rows(src_ws) -> list[GroupSummary]:
         else:
             travel_hours = 0.0
             travel_residual = 0.0
+
+        timing_alerts: list[str] = []
+        if is_manutentori:
+            for stats in info["project_stats"].values():
+                closure_count = int(stats["closure_count"])
+                generic_count = int(stats["generic_count"])
+                project_name = str(stats["project_name"]).strip()
+                if not project_name:
+                    continue
+
+                missing_closures = max(0, generic_count - closure_count)
+                missing_generics = max(0, closure_count - generic_count)
+                timing_alerts.extend(build_timing_alert_text(project_name, missing_closures, missing_generics))
+
         summaries.append(
             GroupSummary(
                 order=info["order"],
@@ -242,6 +299,7 @@ def build_summary_rows(src_ws) -> list[GroupSummary]:
                 total_hours=round(info["total_hours"], 5),
                 travel_hours=travel_hours,
                 travel_residual=travel_residual,
+                timing_alerts="; ".join(timing_alerts),
             )
         )
 
@@ -256,6 +314,7 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
     headers.append("Ore viaggio")
     headers.append("Residuo netto")
     headers.append("% viaggio")
+    headers.append(TIMING_ALERT_COLUMN)
 
     summaries = build_summary_rows(src_ws)
 
@@ -278,6 +337,7 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
         values.append(summary.travel_hours)
         values.append(summary.travel_residual)
         values.append(round(summary.travel_ratio, 4))
+        values.append(summary.timing_alerts)
 
         for c, value in enumerate(values, start=1):
             cell = dst_ws.cell(row_idx, c)
@@ -291,9 +351,10 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
 
     dst_ws.freeze_panes = "A5"
     last_row = len(summaries) + 4
-    dst_ws.auto_filter.ref = f"A4:U{last_row}"
+    last_col = get_column_letter(len(headers))
+    dst_ws.auto_filter.ref = f"A4:{last_col}{last_row}"
 
-    for c in range(1, 22):
+    for c in range(1, len(headers) + 1):
         if c == 1:
             dst_ws.column_dimensions[get_column_letter(c)].width = 18
         elif c in (2, 16):
@@ -306,6 +367,8 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
             dst_ws.column_dimensions[get_column_letter(c)].width = 16
         elif c == 21:
             dst_ws.column_dimensions[get_column_letter(c)].width = 14
+        elif c == 22:
+            dst_ws.column_dimensions[get_column_letter(c)].width = 42
         elif c in (17, 18, 19):
             dst_ws.column_dimensions[get_column_letter(c)].width = 16
 
