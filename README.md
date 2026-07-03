@@ -15,6 +15,7 @@ Il file generato contiene 2 fogli:
 
 2. `Riepilogo Viaggi`
    - raggruppa per dipendente e giorno
+   - mostra solo le colonne utili alla lettura: `Reparto`, `Cod. Progetto`, `Progetto`, `Cod. Argomento`, `Argomento`, `Codice dipendente`, `Nominativo`, `Data`
    - calcola le ore lavorate totali
    - per le righe con `Descr.Reparto = MANUTENTORI` somma le ore di `COMMESSA` e `CHIUSURA`
    - per i `MANUTENTORI` sottrae 1 ora di pausa e mostra il residuo solo se il totale viaggio non copre la pausa
