@@ -364,9 +364,9 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
         for c, value in enumerate(values, start=1):
             cell = dst_ws.cell(row_idx, c)
             cell.value = value
-            if c in (9, 10):
+            if c in (9, 10, 11):
                 cell.number_format = "0.00000"
-            elif c in (11, 12):
+            elif c in (12, 13):
                 cell.number_format = "0.0000%"
             elif c == 8:
                 cell.number_format = "dd/mm/yyyy"
