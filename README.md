@@ -15,13 +15,13 @@ Il file generato contiene 2 fogli:
 
 2. `Riepilogo Viaggi`
    - raggruppa per dipendente e giorno
-   - mostra solo le colonne utili alla lettura: `Reparto`, `Cod. Progetto`, `Progetto`, `Cod. Argomento`, `Argomento`, `Codice dipendente`, `Nominativo`, `Data`
+   - mostra solo le colonne utili alla lettura: `Reparto`, `Cod. Progetto`, `Progetto`, `Codice dipendente`, `Nominativo`, `Data`
    - calcola le ore lavorate totali
    - per le righe con `Descr.Reparto = MANUTENTORI` somma le ore di `COMMESSA` e `CHIUSURA`
    - per i `MANUTENTORI` calcola `Ore viaggio lorde` e `Ore viaggio nette`
    - per i `MANUTENTORI` calcola anche `% viaggio lorde` e `% viaggio nette`
    - per tutti gli altri reparti lascia queste colonne a `0`
-   - puoi filtrare manualmente la colonna `% viaggio nette` o `% viaggio lorde` in Excel
+   - puoi filtrare manualmente la colonna `% viaggio lorde` o `% viaggio nette` in Excel
 
 ## Struttura cartelle
 
@@ -37,7 +37,7 @@ Quando usi l'eseguibile compilato, queste cartelle devono stare nella stessa car
 2. Avvia il programma.
 3. Premi `Elabora file` oppure usa l'eseguibile.
 4. Troverai il risultato nella cartella `output`.
-5. Apri il foglio `Riepilogo Viaggi` e filtra la colonna `% viaggio nette` o `% viaggio lorde` in Excel come preferisci.
+5. Apri il foglio `Riepilogo Viaggi` e filtra la colonna `% viaggio lorde` o `% viaggio nette` in Excel come preferisci.
 
 ## Avvio
 
