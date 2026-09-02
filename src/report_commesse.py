@@ -5,6 +5,7 @@ import subprocess
 import re
 import sys
 import tempfile
+import traceback
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,10 @@ SUMMARY_SHEET_NAME = "Riepilogo Viaggi"
 ERRORS_SHEET_NAME = "Probabili errori"
 DETAIL_OUTPUT_NAME = "ore_analitica.xls"
 SUMMARY_OUTPUT_SUFFIX = "_riepilogo"
+DAILY_SUMMARY_KEYWORD = "riepilogo giornaliero"
+MAINTENANCE_TOLERANCE_MINUTES = 15.0
+OTHER_EMPLOYEES_TOLERANCE_MINUTES = 15.0
+MAINTENANCE_THEORETICAL_START_HOUR = 6.0
 
 TOTAL_PROJ_MARKER = "Totale"
 TRAVEL_KEYWORDS = ("COMMESSA", "CHIUSURA")
@@ -48,34 +53,59 @@ class GroupSummary:
     order: int
     first_row_idx: int
     base_row: list[Any]
-    total_hours: float
+    gross_worked_hours: float
+    net_worked_hours: float
     office_hours: float
     travel_gross_hours: float
     travel_net_hours: float
+    time_check_text: str = ""
+    time_delta: Optional[float] = None
 
     @property
     def gross_ratio(self) -> float:
-        if self.total_hours <= 0:
+        if self.gross_worked_hours <= 0:
             return 0.0
-        return self.travel_gross_hours / self.total_hours
+        return self.travel_gross_hours / self.gross_worked_hours
 
     @property
     def net_ratio(self) -> float:
-        if self.total_hours <= 0:
+        if self.net_worked_hours <= 0:
             return 0.0
-        return self.travel_net_hours / self.total_hours
+        return self.travel_net_hours / self.net_worked_hours
 
     @property
     def office_ratio(self) -> float:
-        if self.total_hours <= 0:
+        if self.gross_worked_hours <= 0:
             return 0.0
-        return self.office_hours / self.total_hours
+        return self.office_hours / self.gross_worked_hours
+
+    @property
+    def office_net_ratio(self) -> float:
+        if self.net_worked_hours <= 0:
+            return 0.0
+        return self.office_hours / self.net_worked_hours
 
 
 @dataclass
 class ProcessingResult:
     detail_path: Path
     summary_path: Path
+
+
+@dataclass
+class DailySummaryEntry:
+    gross_hours: float
+    net_hours: float
+    ordinary_hours: float
+    overtime_hours: float
+    has_recognized_work_hours: bool
+    schedule_text: str
+    row_text: str
+    first_entry_time: Optional[float]
+
+    @property
+    def recognized_work_hours(self) -> float:
+        return self.ordinary_hours + self.overtime_hours
 
 
 def app_root() -> Path:
@@ -90,6 +120,10 @@ def input_dir() -> Path:
 
 def output_dir() -> Path:
     return app_root() / "output"
+
+
+def error_log_path() -> Path:
+    return output_dir() / "ReportCommesse_error.log"
 
 
 def shell_quote(value: Path | str) -> str:
@@ -130,9 +164,43 @@ def ensure_workspace() -> None:
     output_dir().mkdir(parents=True, exist_ok=True)
 
 
+def write_error_log(exc: Exception) -> Path:
+    ensure_workspace()
+    log_path = error_log_path()
+    timestamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_text = (
+        f"[{timestamp}] {type(exc).__name__}: {exc}\n\n"
+        f"{traceback.format_exc()}\n"
+    )
+    log_path.write_text(log_text, encoding="utf-8")
+    return log_path
+
+
+def is_daily_summary_file(path: Path) -> bool:
+    return DAILY_SUMMARY_KEYWORD in normalize_text(path.stem)
+
+
 def latest_input_file() -> Optional[Path]:
     files = sorted(
-        [p for p in input_dir().glob("*.xlsx") if not p.name.startswith("~$")],
+        [
+            p
+            for p in input_dir().glob("*.xlsx")
+            if not p.name.startswith("~$")
+            and not is_daily_summary_file(p)
+        ],
+        key=lambda p: (p.stat().st_mtime, p.name.lower()),
+    )
+    return files[-1] if files else None
+
+
+def latest_daily_summary_file() -> Optional[Path]:
+    files = sorted(
+        [
+            p
+            for p in input_dir().glob("*.xlsx")
+            if not p.name.startswith("~$")
+            and is_daily_summary_file(p)
+        ],
         key=lambda p: (p.stat().st_mtime, p.name.lower()),
     )
     return files[-1] if files else None
@@ -173,6 +241,36 @@ def parse_duration(value: Any) -> Optional[float]:
         return float(match.group(1).replace(",", "."))
 
     return None
+
+
+def parse_time_of_day(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+
+    if isinstance(value, dt.datetime):
+        return value.hour + value.minute / 60.0 + value.second / 3600.0
+
+    if isinstance(value, dt.time):
+        return value.hour + value.minute / 60.0 + value.second / 3600.0
+
+    if isinstance(value, dt.timedelta):
+        return value.total_seconds() / 3600.0
+
+    text = str(value).strip()
+    if not text:
+        return None
+    # Inaz sometimes exports time values with non-standard separators like
+    # '#', '*', '.', or spaces. Normalize them before parsing.
+    text = re.sub(r"[^\d]+", ":", text).strip(":")
+
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", text)
+    if match:
+        hours = int(match.group(1))
+        minutes = int(match.group(2))
+        seconds = int(match.group(3) or 0)
+        return hours + minutes / 60.0 + seconds / 3600.0
+
+    return parse_duration(text)
 
 
 def to_centesimal_hours(value: Any) -> Any:
@@ -243,6 +341,12 @@ def row_argument_name(row: list[Any]) -> str:
     return normalize_text(row[11])
 
 
+def row_argument_code(row: list[Any]) -> str:
+    if len(row) <= 10:
+        return ""
+    return normalize_text(row[10])
+
+
 def is_office_row(row: list[Any]) -> bool:
     if len(row) <= 9:
         return False
@@ -256,6 +360,228 @@ def normalize_text(value: Any) -> str:
 
 def is_generic_commessa_name(project_name: str) -> bool:
     return normalize_text(project_name) == "commessa"
+
+
+def is_formazione_project(project_name: str) -> bool:
+    return normalize_text(project_name) == "costi per formazione aziendale"
+
+
+def is_valid_office_argument(argument_code: str, argument_name: str) -> bool:
+    normalized_code = normalize_text(argument_code)
+    normalized_name = normalize_text(argument_name)
+    return (
+        normalized_code in {"zzsede", "chiusura"}
+        or normalized_name in {"attivita tecn in sede", "chiusura"}
+    )
+
+
+def is_valid_formazione_argument(argument_code: str, argument_name: str) -> bool:
+    normalized_code = normalize_text(argument_code)
+    normalized_name = normalize_text(argument_name)
+    return (
+        normalized_code in {"zzcosto", "chiusura"}
+        or normalized_name in {"costo", "chiusura"}
+    )
+
+
+def row_mentions_ferie_or_rol(row: list[Any]) -> bool:
+    text = " ".join(str(value or "") for value in row).casefold()
+    return "ferie" in text or re.search(r"\br\.?o\.?l\.?\b", text) is not None
+
+
+def daily_summary_mentions_ferie_or_rol(entry: DailySummaryEntry) -> bool:
+    schedule_text = entry.schedule_text.casefold()
+    row_text = entry.row_text
+    return (
+        "ferie" in row_text
+        or re.search(r"\br\.?o\.?l\.?\b", row_text) is not None
+        or "smart working" in row_text
+        or "smartworking" in row_text
+        or "smrwrk" in row_text
+        or "smrwrk24" in row_text
+        or "maternita" in row_text
+        or "maternità" in row_text
+        or "malattia" in row_text
+        or re.search(r"\bmal\b", row_text) is not None
+        or re.search(r"\bma1\b", row_text) is not None
+        or re.search(r"\bma2\b", row_text) is not None
+        or "rol" in schedule_text
+        or "ferie" in schedule_text
+        or "smart working" in schedule_text
+        or "smartworking" in schedule_text
+        or "smrwrk" in schedule_text
+        or "smrwrk24" in schedule_text
+        or "maternita" in schedule_text
+        or "maternità" in schedule_text
+        or "malattia" in schedule_text
+        or re.search(r"\bmal\b", schedule_text) is not None
+        or re.search(r"\bma1\b", schedule_text) is not None
+        or re.search(r"\bma2\b", schedule_text) is not None
+    )
+
+
+def date_key(value: Any) -> Optional[dt.date]:
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return dt.datetime.strptime(text, fmt).date()
+        except ValueError:
+            pass
+    return None
+
+
+def is_workday(value: Any) -> bool:
+    day = date_key(value)
+    if day is None:
+        return True
+    return day.weekday() < 5
+
+
+def find_daily_summary_header(ws, expected_labels: tuple[str, ...]) -> tuple[Optional[int], Optional[int]]:
+    for row_idx in range(1, min(ws.max_row, 15) + 1):
+        for col_idx in range(1, ws.max_column + 1):
+            value = normalize_text(ws.cell(row_idx, col_idx).value)
+            if value in expected_labels:
+                return row_idx, col_idx
+    return None, None
+
+
+def parse_daily_cause(value: Any) -> Optional[tuple[str, float]]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    match = re.match(r"^\s*(\S+)\s+(-?\d+(?:[.,]\d+)?)", text)
+    if not match:
+        return None
+
+    code = re.sub(r"[^a-z0-9]", "", match.group(1).casefold())
+    hours = float(match.group(2).replace(",", "."))
+    return code, hours
+
+
+def load_daily_summary_hours() -> dict[tuple[str, dt.date], DailySummaryEntry]:
+    daily_path = latest_daily_summary_file()
+    if daily_path is None:
+        return {}
+
+    wb = openpyxl.load_workbook(daily_path, data_only=True)
+    ws = wb.active
+
+    employee_header_row, employee_col = find_daily_summary_header(
+        ws,
+        ("nominativo", "dipendente", "dipendente nominativo", "nome dipendente", "cognome nome"),
+    )
+    date_header_row, date_col = find_daily_summary_header(
+        ws,
+        ("data", "giorno"),
+    )
+    schedule_header_row, schedule_col = find_daily_summary_header(
+        ws,
+        ("orario",),
+    )
+
+    if employee_col is None or date_col is None:
+        return {}
+
+    header_row = max(employee_header_row or 1, date_header_row or 1, schedule_header_row or 1)
+    cause_cols = [
+        col_idx
+        for col_idx in range(1, ws.max_column + 1)
+        if normalize_text(ws.cell(header_row, col_idx).value).startswith("cau")
+    ]
+    time_cols: list[tuple[int, int]] = []
+    col_idx = 1
+    while col_idx <= ws.max_column:
+        if normalize_text(ws.cell(header_row, col_idx).value) == "e":
+            next_value = normalize_text(ws.cell(header_row, col_idx + 1).value) if col_idx + 1 <= ws.max_column else ""
+            if next_value == "u":
+                time_cols.append((col_idx, col_idx + 1))
+                col_idx += 2
+                continue
+        col_idx += 1
+
+    daily_hours: dict[tuple[str, dt.date], DailySummaryEntry] = {}
+    first_data_row = header_row + 1
+
+    for row_idx in range(first_data_row, ws.max_row + 1):
+        employee_name = str(ws.cell(row_idx, employee_col).value or "").strip()
+        day_value = ws.cell(row_idx, date_col).value
+        day_key = date_key(day_value)
+        if not employee_name or day_key is None:
+            continue
+
+        worked_hours = 0.0
+        first_entry_time: Optional[float] = None
+        last_exit_time: Optional[float] = None
+        for entry_col, exit_col in time_cols:
+            entry_time = parse_time_of_day(ws.cell(row_idx, entry_col).value)
+            exit_time = parse_time_of_day(ws.cell(row_idx, exit_col).value)
+            if entry_time is None or exit_time is None:
+                continue
+
+            segment_hours = exit_time - entry_time
+            if segment_hours < 0:
+                segment_hours += 24.0
+            worked_hours += segment_hours
+            if first_entry_time is None:
+                first_entry_time = entry_time
+            last_exit_time = exit_time
+
+        row_text = " ".join(str(ws.cell(row_idx, c).value or "") for c in range(1, ws.max_column + 1)).casefold()
+        ordinary_hours = 0.0
+        overtime_hours = 0.0
+        has_recognized_work_hours = False
+        for cause_col in cause_cols:
+            parsed_cause = parse_daily_cause(ws.cell(row_idx, cause_col).value)
+            if parsed_cause is None:
+                continue
+            cause_code, cause_hours = parsed_cause
+            if cause_code == "ord":
+                ordinary_hours += cause_hours
+                has_recognized_work_hours = True
+            elif cause_code.startswith("str"):
+                overtime_hours += cause_hours
+                has_recognized_work_hours = True
+
+        gross_hours = worked_hours
+        net_hours = worked_hours
+        if first_entry_time is not None and last_exit_time is not None:
+            gross_hours = last_exit_time - first_entry_time
+            if gross_hours < 0:
+                gross_hours += 24.0
+
+        if is_workday(day_key):
+            is_manutentori = "manutentori" in row_text
+            if is_manutentori:
+                net_hours = worked_hours
+            else:
+                actual_break = max(round(gross_hours - worked_hours, 5), 0.0)
+                extra_break_needed = max(1.0 - actual_break, 0.0)
+                net_hours = max(worked_hours - extra_break_needed, 0.0)
+        else:
+            net_hours = worked_hours
+
+        key = (normalize_text(employee_name), day_key)
+        schedule_text = str(ws.cell(row_idx, schedule_col).value or "").strip() if schedule_col else ""
+        daily_hours[key] = DailySummaryEntry(
+            gross_hours=round(gross_hours, 5),
+            net_hours=round(net_hours, 5),
+            ordinary_hours=round(ordinary_hours, 5),
+            overtime_hours=round(overtime_hours, 5),
+            has_recognized_work_hours=has_recognized_work_hours,
+            schedule_text=schedule_text,
+            row_text=row_text,
+            first_entry_time=first_entry_time,
+        )
+
+    return daily_hours
 
 
 def copy_cell_style(src, dst) -> None:
@@ -277,7 +603,14 @@ def clone_sheet_layout(src_ws, dst_ws) -> None:
     dst_ws.auto_filter.ref = src_ws.auto_filter.ref
 
     for col_letter, dim in src_ws.column_dimensions.items():
-        dst_ws.column_dimensions[col_letter] = copy.copy(dim)
+        dst_dim = dst_ws.column_dimensions[col_letter]
+        dst_dim.width = dim.width
+        dst_dim.hidden = dim.hidden
+        dst_dim.bestFit = dim.bestFit
+        dst_dim.outlineLevel = dim.outlineLevel
+        dst_dim.collapsed = dim.collapsed
+        dst_dim.min = dim.min
+        dst_dim.max = dim.max
 
 
 def row_quantity(value: Any) -> float:
@@ -302,6 +635,12 @@ def distribute_amount(rows: list[dict[str, Any]], amount: float) -> float:
 
 
 def adjust_lunch_break_for_group(rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    group_day = rows[0]["values"][16]
+    if not is_workday(group_day):
+        return
+
     manutentori_rows = [row for row in rows if row["is_manutentori"] and row["quantity"] > 0]
     if not manutentori_rows:
         return
@@ -323,6 +662,46 @@ def adjust_lunch_break_for_group(rows: list[dict[str, Any]]) -> None:
 
     for row in manutentori_rows:
         row["quantity"] = round(row["quantity"], 5)
+
+
+def recognized_hours_with_adjustments(
+    daily_entry: DailySummaryEntry,
+    net_worked_hours: float,
+    is_manutentori: bool,
+) -> tuple[float, float, float]:
+    recognized_hours = daily_entry.recognized_work_hours
+    early_entry_credit = 0.0
+    no_overtime_schedule_credit = 0.0
+
+    if (
+        normalize_text(daily_entry.schedule_text).endswith("n")
+        and net_worked_hours > recognized_hours
+    ):
+        no_overtime_schedule_credit = net_worked_hours - recognized_hours
+        return (
+            round(net_worked_hours, 5),
+            0.0,
+            round(no_overtime_schedule_credit, 5),
+        )
+
+    if (
+        is_manutentori
+        and daily_entry.first_entry_time is not None
+        and daily_entry.first_entry_time < MAINTENANCE_THEORETICAL_START_HOUR
+        and (
+            net_worked_hours - recognized_hours
+            > MAINTENANCE_TOLERANCE_MINUTES / 60.0
+        )
+    ):
+        early_entry_credit = (
+            MAINTENANCE_THEORETICAL_START_HOUR - daily_entry.first_entry_time
+        )
+
+    return (
+        round(recognized_hours + early_entry_credit, 5),
+        round(early_entry_credit, 5),
+        0.0,
+    )
 
 
 def collect_group_summaries(src_ws) -> OrderedDict[tuple[Any, Any, Any], dict[str, Any]]:
@@ -371,7 +750,7 @@ def collect_group_summaries(src_ws) -> OrderedDict[tuple[Any, Any, Any], dict[st
 
         info["rows"].append(row_info)
         info["total_hours"] += quantity
-        if row_info["is_manutentori"] and is_office_row(values):
+        if row_info["is_manutentori"] and is_office_row(values) and not is_chiusura_row(values):
             info["office_hours"] += quantity
         if row_info["is_manutentori"] and travel_row(values):
             info["travel_gross_hours"] += quantity
@@ -419,49 +798,103 @@ def build_detail_sheet(src_ws, dst_ws) -> dict[int, int]:
     return source_to_output_row
 
 
-def build_summary_rows(src_ws) -> list[GroupSummary]:
+def build_summary_rows(
+    src_ws,
+    daily_summary_hours: dict[tuple[str, dt.date], DailySummaryEntry],
+) -> list[GroupSummary]:
     grouped = collect_group_summaries(src_ws)
 
     summaries: list[GroupSummary] = []
     for info in grouped.values():
         base_row = list(info["rows"][0]["values"])
+        net_rows = [dict(row) for row in info["rows"]]
+        adjust_lunch_break_for_group(net_rows)
+        net_worked_hours = round(sum(row["quantity"] for row in net_rows), 5)
         gross_travel = round(info["travel_gross_hours"], 5)
         is_manutentori = str(base_row[7] or "").strip().upper() == "MANUTENTORI"
-        if is_manutentori:
-            travel_net_hours = round(gross_travel - 1.0, 5)
-        else:
-            travel_net_hours = 0.0
+        travel_net_hours = (
+            round(
+                sum(row["quantity"] for row in net_rows if travel_row(row["values"])),
+                5,
+            )
+            if is_manutentori
+            else 0.0
+        )
+
+        day_key = date_key(base_row[16])
+        daily_entry = None
+        time_check_text = ""
+        time_delta = None
+        if day_key is not None:
+            summary_key = (normalize_text(base_row[15]), day_key)
+            daily_entry = daily_summary_hours.get(summary_key)
+        if daily_entry is not None:
+            if daily_entry.has_recognized_work_hours:
+                compared_hours, early_entry_credit, no_overtime_schedule_credit = recognized_hours_with_adjustments(
+                    daily_entry,
+                    net_worked_hours,
+                    is_manutentori,
+                )
+                comparison_label = "ORD + STR netti"
+                if no_overtime_schedule_credit > 0:
+                    comparison_label += (
+                        f" + straordinari esclusi da orario N "
+                        f"{no_overtime_schedule_credit:.5f}"
+                    )
+                elif early_entry_credit > 0:
+                    comparison_label += f" + anticipo prima delle 06:00 {early_entry_credit:.5f}"
+            else:
+                compared_hours = None
+                comparison_label = ""
+
+            if compared_hours is not None:
+                time_delta = round(compared_hours - net_worked_hours, 5)
+                time_check_text = (
+                    f"{comparison_label} {compared_hours:.5f} - "
+                    f"rendicontate nette {net_worked_hours:.5f}"
+                )
 
         summaries.append(
             GroupSummary(
                 order=info["order"],
                 first_row_idx=info["first_row_idx"],
                 base_row=base_row,
-                total_hours=round(info["total_hours"], 5),
+                gross_worked_hours=round(info["total_hours"], 5),
+                net_worked_hours=net_worked_hours,
                 office_hours=round(info["office_hours"], 5) if is_manutentori else 0.0,
                 travel_gross_hours=gross_travel if is_manutentori else 0.0,
                 travel_net_hours=travel_net_hours,
+                time_check_text=time_check_text,
+                time_delta=time_delta,
             )
         )
 
     return summaries
 
 
-def build_summary_sheet(src_ws, dst_ws) -> None:
+def build_summary_sheet(
+    src_ws,
+    dst_ws,
+    daily_summary_hours: dict[tuple[str, dt.date], DailySummaryEntry],
+) -> None:
     clone_sheet_layout(src_ws, dst_ws)
 
     headers = [label for _, label in SUMMARY_SOURCE_COLUMNS]
     headers.extend([
-        "Ore lavorate totali",
+        "Ore lorde lavorate",
+        "Ore nette lavorate",
         "Ore sede ufficio",
         "Ore viaggio lorde",
         "Ore viaggio nette",
-        "% sede ufficio",
+        "% sede ufficio lorde",
+        "% sede ufficio nette",
         "% viaggio lorde",
         "% viaggio nette",
+        "Controllo ore INAZ",
+        "Delta ore INAZ",
     ])
 
-    summaries = build_summary_rows(src_ws)
+    summaries = build_summary_rows(src_ws, daily_summary_hours)
 
     title = dst_ws["A1"]
     title.value = "Riepilogo Viaggi"
@@ -480,25 +913,31 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
         values = [summary.base_row[idx] for idx, _ in SUMMARY_SOURCE_COLUMNS]
         values.extend(
             [
-                summary.total_hours,
+                summary.gross_worked_hours,
+                summary.net_worked_hours,
                 summary.office_hours,
                 summary.travel_gross_hours,
                 summary.travel_net_hours,
                 round(summary.office_ratio, 4),
+                round(summary.office_net_ratio, 4),
                 round(summary.gross_ratio, 4),
                 round(summary.net_ratio, 4),
+                summary.time_check_text,
+                summary.time_delta,
             ]
         )
 
         for c, value in enumerate(values, start=1):
             cell = dst_ws.cell(row_idx, c)
             cell.value = value
-            if c in (5, 6, 7, 8):
+            if c in (5, 6, 7, 8, 9):
                 cell.number_format = "0.00000"
-            elif c in (9, 10, 11):
+            elif c in (10, 11, 12, 13):
                 cell.number_format = "0.0000%"
             elif c == 4:
                 cell.number_format = "dd/mm/yyyy"
+            elif c == 15 and value is not None:
+                cell.number_format = "0.00000"
 
     dst_ws.freeze_panes = "A5"
     last_row = len(summaries) + 4
@@ -514,13 +953,49 @@ def build_summary_sheet(src_ws, dst_ws) -> None:
             dst_ws.column_dimensions[get_column_letter(c)].width = 24
         elif c == 4:
             dst_ws.column_dimensions[get_column_letter(c)].width = 14
-        elif c in (5, 6, 7, 8):
+        elif c in (5, 6, 7, 8, 9):
             dst_ws.column_dimensions[get_column_letter(c)].width = 16
-        elif c in (9, 10, 11):
+        elif c in (10, 11, 12, 13):
             dst_ws.column_dimensions[get_column_letter(c)].width = 14
+        elif c == 14:
+            dst_ws.column_dimensions[get_column_letter(c)].width = 40
+        elif c == 15:
+            dst_ws.column_dimensions[get_column_letter(c)].width = 16
 
 
-def build_errors_sheet(src_ws, dst_ws, detail_row_map: dict[int, int]) -> None:
+def matching_detail_row(
+    detail_ws,
+    employee_name: Any,
+    day_value: Any,
+    preferred_row: Optional[int] = None,
+) -> Optional[int]:
+    expected_employee = normalize_text(employee_name)
+    expected_day = date_key(day_value)
+
+    def row_matches(row_idx: int) -> bool:
+        if row_idx < 2 or row_idx > detail_ws.max_row:
+            return False
+        return (
+            normalize_text(detail_ws.cell(row_idx, 16).value) == expected_employee
+            and date_key(detail_ws.cell(row_idx, 17).value) == expected_day
+        )
+
+    if preferred_row is not None and row_matches(preferred_row):
+        return preferred_row
+
+    for row_idx in range(2, detail_ws.max_row + 1):
+        if row_matches(row_idx):
+            return row_idx
+    return None
+
+
+def build_errors_sheet(
+    src_ws,
+    detail_ws,
+    dst_ws,
+    detail_row_map: dict[int, int],
+    daily_summary_hours: dict[tuple[str, dt.date], DailySummaryEntry],
+) -> None:
     clone_sheet_layout(src_ws, dst_ws)
 
     grouped = collect_group_summaries(src_ws)
@@ -531,32 +1006,143 @@ def build_errors_sheet(src_ws, dst_ws, detail_row_map: dict[int, int]) -> None:
         first_row_values = info["rows"][0]["values"]
         day_label = first_row_values[16]
         employee_name = first_row_values[15]
+        is_manutentori = str(first_row_values[7] or "").strip().upper() == "MANUTENTORI"
         total_hours = info["total_hours"]
         travel_gross_hours = info["travel_gross_hours"]
+        net_rows = [dict(row) for row in info["rows"]]
+        adjust_lunch_break_for_group(net_rows)
+        net_worked_hours = round(sum(row["quantity"] for row in net_rows), 5)
 
         if total_hours > 0 and abs(travel_gross_hours - total_hours) <= 0.00001 and travel_gross_hours > 0:
+            mapped_row_idx = matching_detail_row(
+                detail_ws,
+                employee_name,
+                day_label,
+                detail_row_map.get(first_row_idx),
+            )
+            if mapped_row_idx is not None:
+                error_rows.append(
+                    {
+                        "row_idx": mapped_row_idx,
+                        "data": day_label,
+                        "nominativo": employee_name,
+                        "errore": "ore viaggio 100%",
+                        "controllo": "",
+                    }
+                )
+
+        day_key = date_key(day_label)
+        daily_entry = None
+        if day_key is not None:
+            daily_entry = daily_summary_hours.get((normalize_text(employee_name), day_key))
+
+        if daily_entry is not None and not daily_summary_mentions_ferie_or_rol(daily_entry):
+            if daily_entry.has_recognized_work_hours:
+                compared_hours, early_entry_credit, no_overtime_schedule_credit = recognized_hours_with_adjustments(
+                    daily_entry,
+                    net_worked_hours,
+                    is_manutentori,
+                )
+                tolerance_minutes = (
+                    MAINTENANCE_TOLERANCE_MINUTES
+                    if is_manutentori
+                    else OTHER_EMPLOYEES_TOLERANCE_MINUTES
+                )
+                error_message = "ore nette rendicontate diverse da ORD + straordinari INAZ"
+                comparison_label = "ORD + STR netti"
+                if no_overtime_schedule_credit > 0:
+                    comparison_label += (
+                        f" + straordinari esclusi da orario N "
+                        f"{no_overtime_schedule_credit:.5f}"
+                    )
+                elif early_entry_credit > 0:
+                    comparison_label += f" + anticipo prima delle 06:00 {early_entry_credit:.5f}"
+            else:
+                compared_hours = None
+                tolerance_minutes = 0.0
+                error_message = ""
+                comparison_label = ""
+
+            if compared_hours is not None:
+                delta_hours = round(compared_hours - net_worked_hours, 5)
+                delta_minutes = abs(delta_hours) * 60.0
+                if delta_minutes > tolerance_minutes + 0.00001:
+                    mapped_row_idx = matching_detail_row(
+                        detail_ws,
+                        employee_name,
+                        day_label,
+                        detail_row_map.get(first_row_idx),
+                    )
+                    if mapped_row_idx is not None:
+                        error_rows.append(
+                            {
+                                "row_idx": mapped_row_idx,
+                                "data": day_label,
+                                "nominativo": employee_name,
+                                "errore": error_message,
+                                "controllo": (
+                                    f"delta {delta_hours:.5f} ({delta_minutes:.2f} min) | "
+                                    f"{comparison_label} {compared_hours:.5f} - "
+                                    f"rendicontate nette {net_worked_hours:.5f}"
+                                ),
+                            }
+                        )
+
+    for detail_row_idx in range(2, detail_ws.max_row + 1):
+        values = [detail_ws.cell(detail_row_idx, c).value for c in range(1, detail_ws.max_column + 1)]
+        if is_blank_row(values) or is_total_row(values):
+            continue
+        project_name = row_project_name(values)
+        argument_name = row_argument_name(values)
+        argument_code = row_argument_code(values)
+        is_manutentori = str(values[7] or "").strip().upper() == "MANUTENTORI"
+
+        if not project_name and not argument_name:
             error_rows.append(
                 {
-                    "row_idx": detail_row_map.get(first_row_idx, first_row_idx),
-                    "data": day_label,
-                    "nominativo": employee_name,
-                    "errore": "ore viaggio 100%",
+                    "row_idx": detail_row_idx,
+                    "data": values[16],
+                    "nominativo": values[15],
+                    "errore": f"Riga {detail_row_idx} progetto e argomento mancanti",
+                    "controllo": "",
                 }
             )
 
-        for row in info["rows"]:
-            values = row["values"]
-            project_name = row_project_name(values)
-            argument_name = row_argument_name(values)
-            if project_name and project_name != "commessa" and not argument_name:
-                error_rows.append(
-                    {
-                        "row_idx": detail_row_map.get(row["row_idx"], row["row_idx"]),
-                        "data": values[16],
-                        "nominativo": values[15],
-                        "errore": f'manca argomento per "{values[9]}"',
-                    }
-                )
+        if project_name and project_name != "commessa" and not argument_name:
+            error_rows.append(
+                {
+                    "row_idx": detail_row_idx,
+                    "data": values[16],
+                    "nominativo": values[15],
+                    "errore": f'manca argomento per "{values[9]}"',
+                    "controllo": "",
+                }
+            )
+        if project_name and is_formazione_project(project_name) and not is_valid_formazione_argument(argument_code, argument_name):
+            error_rows.append(
+                {
+                    "row_idx": detail_row_idx,
+                    "data": values[16],
+                    "nominativo": values[15],
+                    "errore": 'argomento sbagliato per corso formazione: atteso "ZZCOSTO" oppure "CHIUSURA"',
+                    "controllo": "",
+                }
+            )
+        if (
+            project_name
+            and is_manutentori
+            and is_office_row(values)
+            and not is_valid_office_argument(argument_code, argument_name)
+        ):
+            error_rows.append(
+                {
+                    "row_idx": detail_row_idx,
+                    "data": values[16],
+                    "nominativo": values[15],
+                    "errore": 'argomento sbagliato per sede ufficio: atteso "ATTIVITA TECN IN SEDE" oppure "CHIUSURA"',
+                    "controllo": "",
+                }
+            )
 
     error_rows.sort(key=lambda item: (item["row_idx"], item["errore"]))
 
@@ -564,7 +1150,7 @@ def build_errors_sheet(src_ws, dst_ws, detail_row_map: dict[int, int]) -> None:
     title.value = "Probabili errori"
     title.font = Font(bold=True, size=14)
 
-    headers = ["Numero riga", "Data", "Nominativo", "Errore"]
+    headers = ["Numero riga", "Data", "Nominativo", "Errore", "Controllo ore INAZ"]
     for c, header in enumerate(headers, start=1):
         cell = dst_ws.cell(4, c)
         cell.value = header
@@ -579,14 +1165,16 @@ def build_errors_sheet(src_ws, dst_ws, detail_row_map: dict[int, int]) -> None:
         dst_ws.cell(row_idx, 2).value = item["data"]
         dst_ws.cell(row_idx, 3).value = item["nominativo"]
         dst_ws.cell(row_idx, 4).value = item["errore"]
+        dst_ws.cell(row_idx, 5).value = item["controllo"]
         dst_ws.cell(row_idx, 2).number_format = "dd/mm/yyyy"
 
     dst_ws.freeze_panes = "A5"
-    dst_ws.auto_filter.ref = f"A4:D{max(len(error_rows) + 4, 4)}"
+    dst_ws.auto_filter.ref = f"A4:E{max(len(error_rows) + 4, 4)}"
     dst_ws.column_dimensions["A"].width = 14
     dst_ws.column_dimensions["B"].width = 14
     dst_ws.column_dimensions["C"].width = 24
     dst_ws.column_dimensions["D"].width = 48
+    dst_ws.column_dimensions["E"].width = 56
 
 
 def process_file(source_path: Path) -> ProcessingResult:
@@ -609,8 +1197,9 @@ def process_file(source_path: Path) -> ProcessingResult:
     summary_wb.calculation = CalcProperties(calcMode="auto", fullCalcOnLoad=True, forceFullCalc=True)
     summary_ws = summary_wb.create_sheet(SUMMARY_SHEET_NAME)
     errors_ws = summary_wb.create_sheet(ERRORS_SHEET_NAME)
-    build_summary_sheet(src_ws, summary_ws)
-    build_errors_sheet(src_ws, errors_ws, detail_row_map)
+    daily_summary_hours = load_daily_summary_hours()
+    build_summary_sheet(src_ws, summary_ws, daily_summary_hours)
+    build_errors_sheet(src_ws, detail_ws, errors_ws, detail_row_map, daily_summary_hours)
 
     detail_path = output_dir() / DETAIL_OUTPUT_NAME
     summary_path = output_dir() / f"{source_path.stem}{SUMMARY_OUTPUT_SUFFIX}.xlsx"
@@ -734,9 +1323,20 @@ def run_cli(argv: list[str]) -> int:
         print("Nessun file trovato in input.")
         return 1
 
-    result = process_file(source)
-    print(f"Creati: {result.detail_path} | {result.summary_path}")
-    return 0
+    try:
+        result = process_file(source)
+        print(f"Creati: {result.detail_path} | {result.summary_path}")
+        return 0
+    except Exception as exc:
+        log_path = write_error_log(exc)
+        print(f"Errore: {exc}")
+        print(f"Dettagli salvati in: {log_path}")
+        if getattr(sys, "frozen", False):
+            try:
+                input("Premi Invio per chiudere...")
+            except EOFError:
+                pass
+        return 1
 
 
 def main() -> int:
