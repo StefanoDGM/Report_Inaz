@@ -39,6 +39,7 @@ I file generati sono 2:
    - per i `MANUTENTORI`, se la prima timbratura e precedente alle 06:00, l'intero anticipo rispetto alle 06:00 viene confrontato con l'eccesso delle ore nette rendicontate; il caso e accettato solo se i due valori differiscono al massimo di 15 minuti
    - se il valore della colonna `Orario` termina con `N`, un'eccedenza delle ore nette rendicontate rispetto a `ORD + STR*` non viene segnalata: la `N` indica che gli straordinari sono esclusi dalle ore riconosciute da INAZ
    - segnala, per tutti i reparti, solo differenze superiori a 15 minuti
+   - per i `MANUTENTORI` segnala le giornate in cui manca una riga con progetto `COMMESSA`; il controllo viene eseguito prima della sottrazione della pausa, quindi una riga `COMMESSA` portata a zero dalla pausa risulta comunque presente
    - puoi filtrare manualmente la colonna `% viaggio nette` o `% viaggio lorde` in Excel
 
 ## Controlli nel foglio Probabili errori

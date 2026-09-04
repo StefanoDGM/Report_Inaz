@@ -1009,6 +1009,31 @@ def build_errors_sheet(
         is_manutentori = str(first_row_values[7] or "").strip().upper() == "MANUTENTORI"
         total_hours = info["total_hours"]
         travel_gross_hours = info["travel_gross_hours"]
+
+        # Check the original rows before applying the lunch-break deduction:
+        # a COMMESSA row remains valid even when its adjusted quantity becomes zero.
+        has_generic_commessa = any(
+            is_generic_commessa_row(row["values"])
+            for row in info["rows"]
+        )
+        if is_manutentori and not has_generic_commessa:
+            mapped_row_idx = matching_detail_row(
+                detail_ws,
+                employee_name,
+                day_label,
+                detail_row_map.get(first_row_idx),
+            )
+            if mapped_row_idx is not None:
+                error_rows.append(
+                    {
+                        "row_idx": mapped_row_idx,
+                        "data": day_label,
+                        "nominativo": employee_name,
+                        "errore": "progetto COMMESSA mancante nella giornata",
+                        "controllo": "",
+                    }
+                )
+
         net_rows = [dict(row) for row in info["rows"]]
         adjust_lunch_break_for_group(net_rows)
         net_worked_hours = round(sum(row["quantity"] for row in net_rows), 5)
